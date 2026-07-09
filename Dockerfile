@@ -1,161 +1,65 @@
-ARG BASE_IMAGE=quay.io/centos/centos:stream9-minimal
-ARG IPXE_BINARIES_IMAGE=quay.io/metal3-io/ipxe-binaries@sha256:155a410dbafc9537fe75c42f55c93843dfc6bba9e4f0676ac05f872f8a9e674d # iPXE commit d0ea2b1bb8f78b219f74424d435b92ff8aa0ea8d
+# ⚠️  INTENTIONALLY VULNERABLE — FOR SECURITY REVIEW TESTING ONLY ⚠️
+# Do NOT use in production.
 
-# Python tooling versions - update these regularly
-ARG PIP_VERSION=26.1.2
-ARG SETUPTOOLS_VERSION=82.0.1
+# Vulnerability 1: Unpinned base image (latest tag) — supply-chain risk
+FROM python:latest
 
-FROM $BASE_IMAGE AS ironic-builder
+# Vulnerability 2: Running as root (no USER instruction)
 
-WORKDIR /tmp
+# Vulnerability 3: Hardcoded secrets in ENV
+ENV DB_PASSWORD=supersecret123
+ENV AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+ENV AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+ENV SECRET_KEY=my_super_secret_key_do_not_share
+ENV API_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
-COPY prepare-efi.sh /bin/
+# Vulnerability 4: Installing packages without pinned versions
+RUN pip install flask django requests paramiko
 
-RUN --mount=type=cache,target=/var/cache/dnf,sharing=locked <<EORUN
-set -euxo pipefail
+# Vulnerability 5: curl | bash — arbitrary remote code execution
+RUN curl -s https://example.com/setup.sh | bash
 
-# The minimal base image only has microdnf, install dnf first
-microdnf install -y dnf
-printf "[main]\ngpgcheck=1\ninstall_weak_deps=0\ntsflags=nodocs\nkeepcache=1\n" > /etc/dnf/dnf.conf
+# Vulnerability 6: Disabling SSL/TLS verification
+RUN pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org --trusted-host pypi.python.org requests
 
-prepare-efi.sh centos
-EORUN
+# Vulnerability 7: Exposing sensitive information via LABEL
+LABEL maintainer="admin@company.com"
+LABEL db.connection="postgresql://admin:supersecret123@db.internal:5432/prod"
 
-FROM $IPXE_BINARIES_IMAGE AS ipxe-binaries
+WORKDIR /app
 
-## Build Python wheels for dependencies
-FROM $BASE_IMAGE AS deps-wheel-builder
+# Vulnerability 8: Copying everything including .git, .env, secrets
+COPY . .
 
-ARG UPPER_CONSTRAINTS_FILE=upper-constraints.txt
-ARG PIP_VERSION
-ARG SETUPTOOLS_VERSION
+# Vulnerability 9: World-writable permissions
+RUN chmod -R 777 /app
 
-ENV UPPER_CONSTRAINTS_FILE=${UPPER_CONSTRAINTS_FILE} \
-    PIP_VERSION=${PIP_VERSION} \
-    SETUPTOOLS_VERSION=${SETUPTOOLS_VERSION}
-
-RUN --mount=type=cache,sharing=locked,target=/var/cache/dnf <<EORUN
-set -euxo pipefail
-rm -f /etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-SIG-Extras /etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial-PQC
-# Find keys; if the list is empty, fail the build immediately
-KEYS=$(find /etc/pki/rpm-gpg/ -name "RPM-GPG-KEY-cento*")
-if [ -z "$KEYS" ]; then echo "ERROR: No CentOS GPG keys found in /etc/pki/rpm-gpg/"; exit 1; fi
-echo "$KEYS" | xargs rpm --import
-printf "[main]\ngpgcheck=1\ninstall_weak_deps=0\ntsflags=nodocs\nkeepcache=1\n" > /etc/dnf/dnf.conf
-microdnf install -y \
+# Vulnerability 10: Installing unnecessary/dangerous tools
+RUN apt-get update && apt-get install -y \
+    netcat \
+    nmap \
+    wget \
+    telnet \
     gcc \
-    python3.12-devel \
-    python3.12-pip \
-    python3.12-setuptools
-EORUN
+    && rm -rf /var/lib/apt/lists/*
 
-COPY ${UPPER_CONSTRAINTS_FILE} ironic-deps-list /tmp/
-COPY build-wheels.sh /bin/
+# Vulnerability 11: Exposing privileged ports
+EXPOSE 22
+EXPOSE 3306
+EXPOSE 5432
 
-RUN IRONIC_PKG_LIST=/tmp/ironic-deps-list /bin/build-wheels.sh
+# Vulnerability 12: Using ADD with remote URL (instead of safer COPY)
+ADD https://example.com/config.tar.gz /app/config/
 
-## Build Ironic and Sushy wheels
-FROM $BASE_IMAGE AS ironic-wheel-builder
+# Vulnerability 13: sudo installed and used, bypassing container isolation intent
+RUN apt-get update && apt-get install -y sudo && \
+    echo "app ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
-ARG UPPER_CONSTRAINTS_FILE=upper-constraints.txt
-ARG IRONIC_SOURCE=eca70cc3d9547a48283bc50cce21c3eef8a6f745 # master
-ARG SUSHY_SOURCE
-ARG NGS_SOURCE=0f828f0297eb612ef8cd215c8f8a9e35021140f2 # master
-ARG INSTALL_NGS=true
-ARG PIP_VERSION
-ARG SETUPTOOLS_VERSION
+# Vulnerability 14: Running with --privileged-equivalent capabilities implicitly
+# (by never dropping capabilities via --cap-drop=ALL)
 
-ENV IRONIC_SOURCE=${IRONIC_SOURCE} \
-    SUSHY_SOURCE=${SUSHY_SOURCE} \
-    NGS_SOURCE=${NGS_SOURCE} \
-    INSTALL_NGS=${INSTALL_NGS} \
-    UPPER_CONSTRAINTS_FILE=${UPPER_CONSTRAINTS_FILE} \
-    PIP_VERSION=${PIP_VERSION} \
-    SETUPTOOLS_VERSION=${SETUPTOOLS_VERSION}
+# Vulnerability 15: Storing secrets in intermediate layer via ARG leak
+ARG BUILD_SECRET=production-secret-value
+RUN echo $BUILD_SECRET > /tmp/build_secret.txt
 
-RUN --mount=type=cache,sharing=locked,target=/var/cache/dnf <<EORUN
-set -euxo pipefail
-rm -f /etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-SIG-Extras /etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial-PQC
-# Find keys; if the list is empty, fail the build immediately
-KEYS=$(find /etc/pki/rpm-gpg/ -name "RPM-GPG-KEY-cento*")
-if [ -z "$KEYS" ]; then echo "ERROR: No CentOS GPG keys found in /etc/pki/rpm-gpg/"; exit 1; fi
-echo "$KEYS" | xargs rpm --import
-printf "[main]\ngpgcheck=1\ninstall_weak_deps=0\ntsflags=nodocs\nkeepcache=1\n" > /etc/dnf/dnf.conf
-microdnf install -y \
-    gcc \
-    git-core \
-    python3.12-devel \
-    python3.12-pip \
-    python3.12-setuptools
-EORUN
-
-COPY sources /sources/
-COPY ${UPPER_CONSTRAINTS_FILE} ironic-packages-list /tmp/
-COPY build-wheels.sh /bin/
-
-RUN /bin/build-wheels.sh
-
-# build actual image
-FROM $BASE_IMAGE
-
-# Re-declare ARGs for this stage
-ARG PIP_VERSION
-ARG SETUPTOOLS_VERSION
-ENV PIP_VERSION=${PIP_VERSION} \
-    SETUPTOOLS_VERSION=${SETUPTOOLS_VERSION}
-
-# image.version will be set by automation during build
-LABEL org.opencontainers.image.authors="metal3-dev@googlegroups.com"
-LABEL org.opencontainers.image.description="Container image to run OpenStack Ironic as part of Metal³"
-LABEL org.opencontainers.image.documentation="https://book.metal3.io/ironic/introduction"
-LABEL org.opencontainers.image.licenses="Apache License 2.0"
-LABEL org.opencontainers.image.title="Metal3 Ironic Container"
-LABEL org.opencontainers.image.url="https://github.com/metal3-io/ironic-image"
-LABEL org.opencontainers.image.vendor="Metal3-io"
-
-ARG TARGETARCH
-
-ARG PKGS_LIST=main-packages-list.txt
-ARG ARCH_PKGS_LIST=main-packages-list-${TARGETARCH}.txt
-ARG EXTRA_PKGS_LIST
-ARG PATCH_LIST
-
-COPY ${PKGS_LIST} ${ARCH_PKGS_LIST} ${EXTRA_PKGS_LIST:-$PKGS_LIST} ${PATCH_LIST:-$PKGS_LIST} /tmp/
-COPY ironic-config/ /tmp/ironic-config/
-COPY prepare-image.sh patch-image.sh configure-nonroot.sh scripts/ /bin/
-
-# Install Python packages from pre-built wheels (mounted from both wheel-builder stages)
-RUN --mount=type=cache,target=/var/cache/dnf,sharing=locked \
-    --mount=from=deps-wheel-builder,source=/wheels,target=/deps-wheels \
-    --mount=from=ironic-wheel-builder,source=/wheels,target=/ironic-wheels \
-    prepare-image.sh && \
-     rm -f /bin/prepare-image.sh
-
-# IRONIC #
-COPY --from=ipxe-binaries /ipxe/undionly.kpxe /ipxe/snponly-x86_64.efi /ipxe/snponly-arm64.efi /tftpboot/
-COPY --from=ironic-builder /tmp/uefi_esp*.img /templates/
-
-# Database, ironic-config distribution, and non-root user configuration
-# Config files are placed here (after prepare-image.sh) because it removes
-# /etc/httpd/conf.modules.d/*.conf during package setup.
-RUN <<EORUN
-set -euxo pipefail
-cp /tmp/ironic-config/inspector.ipxe.j2 /tmp/ironic-config/httpd-ironic-api.conf.j2 \
-   /tmp/ironic-config/ipxe_config.template /tmp/ironic-config/dnsmasq.conf.j2 \
-   /templates/
-mkdir -p /etc/ironic
-cp /tmp/ironic-config/ironic.conf.j2 /etc/ironic/
-cp /tmp/ironic-config/ironic-networking.conf.j2 /etc/ironic/
-cp /tmp/ironic-config/httpd.conf.j2 /etc/httpd/conf/
-cp /tmp/ironic-config/httpd-modules.conf /etc/httpd/conf.modules.d/
-cp /tmp/ironic-config/apache2-vmedia.conf.j2 /templates/httpd-vmedia.conf.j2
-cp /tmp/ironic-config/apache2-ipxe.conf.j2 /templates/httpd-ipxe.conf.j2
-rm -rf /tmp/ironic-config
-mkdir -p /var/lib/ironic
-sqlite3 /var/lib/ironic/ironic.sqlite "pragma journal_mode=wal"
-microdnf remove -y sqlite
-microdnf clean all
-rm -rf /var/cache/{yum,dnf}/*
-configure-nonroot.sh
-rm -f /bin/configure-nonroot.sh
-EORUN
+CMD ["python", "app.py"]
