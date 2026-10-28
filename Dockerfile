@@ -12,7 +12,12 @@ ENV SECRET_KEY=""
 ENV API_TOKEN=""
 
 # Install packages without disabling TLS verification and avoid duplicate installs.
-RUN pip install --no-cache-dir flask django requests paramiko
+RUN pip install --no-cache-dir --upgrade flask django requests paramiko && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    gcc \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
 
 # Avoid executing remote scripts directly.
 RUN curl -fsSL https://example.com/setup.sh -o /tmp/setup.sh && \
@@ -27,11 +32,6 @@ WORKDIR /app
 COPY . .
 
 RUN chmod -R go-w /app
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
 
 EXPOSE 22
 EXPOSE 3306
